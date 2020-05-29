@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner   
+  namespace: gitlab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: runner
+  template:
+    metadata:
+      labels:
+        name: runner
+    spec:
+      serviceAccountName: gitlab
+      initContainers:
+      - name: register
+        image: gitlab/gitlab-runner:v12.4.0
+        imagePullPolicy: "IfNotPresent"
+        args:
+        - register
+        env:
+        - name: MY_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: CI_SERVER_URL
+          value: http://gitlab.10.100.254.176.xip.io/
+        - name: REGISTER_NON_INTERACTIVE
+          value: "true"
+        - name: REGISTRATION_TOKEN
+          value: zsLhmgv5Y4Am-v7Khx4q
+        - name: RUNNER_NAME
+          value: "$(MY_POD_NAME)-k8s"
+        - name: RUNNER_EXECUTOR
+          value: kubernetes
+        - name: RUNNER_REQUEST_CONCURRENCY
+          value: "2"
+        - name: KUBERNETES_NAMESPACE
+          value: "gitlab"
+        - name: KUBERNETES_PRIVILEGED
+          value: "true"
+        - name: KUBERNETES_IMAGE
+          value: "busybox:1.31.0"
+        - name: KUBERNETES_PULL_POLICY
+          value: "if-not-present"
+#        - name: KUBERNETES_SERVICE_ACCOUNT
+#          value: ""
+        volumeMounts:
+        - mountPath: /etc/gitlab-runner
+          name: config
+      - name: configurator
+        image: busybox:1.31.0
+        imagePullPolicy: "IfNotPresent"
+        command: 
+        - sh
+        - -c
+        - |
+          echo -e '      [[runners.kubernetes.volumes.pvc]]\n        name = "pvc-gitlab-code"\n        mount_path = "/code"' >> /etc/gitlab-runner/config.toml
+        volumeMounts:
+        - mountPath: /etc/gitlab-runner
+          name: config
+      containers:
+      - name: runner
+        image: gitlab/gitlab-runner:v12.4.0
+        imagePullPolicy: "IfNotPresent"
+        args:
+        - run
+        volumeMounts:
+        - mountPath: /etc/gitlab-runner
+          name: config
+#        - mountPath: /etc/ssl/certs
+#          name: cacerts
+#          readOnly: true
+      volumes:
+      - name: config
+        emptyDir: {}
+#      - hostPath:
+#          path: /usr/share/ca-certificates/mozilla
+#        name: cacerts

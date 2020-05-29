@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: bill-jc.com/nfs
+  name: pvc-openproject
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: managed-nfs-storage
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openproject
+spec:
+  ports:
+  - name: 8080tcp
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: openproject
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: openproject
+  name: openproject
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openproject
+  template:
+    metadata:
+      labels:
+        app: openproject
+    spec:
+      containers:
+      - name: openproject
+        image: openproject/community:8
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: 8080tcp
+          containerPort: 8080
+          protocol: TCP
+        readinessProbe:
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+          tcpSocket:
+            port: 8080
+        env:
+        - name: SECRET_KEY_BASE
+          value: secret
+        stdin: true
+        tty: true
+        volumeMounts:
+        - name: openproject-data
+          mountPath: /var/lib/postgresql/9.6/main
+          subPath: pgdata
+        - name: openproject-data
+          mountPath: /var/db/openproject
+          subPath: static
+        - name: openproject-logs
+          mountPath: /var/log/supervisor
+      volumes:
+      - name: openproject-logs
+        emptyDir: {}
+      - name: openproject-data
+        persistentVolumeClaim:
+          claimName: pvc-openproject
