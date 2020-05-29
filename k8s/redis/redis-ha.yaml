@@ -1,0 +1,273 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-ha-secret
+  labels:
+    app: redis-ha
+type: Opaque
+data:
+  app.auth: bXlyZWRpcw== #myredis
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: redis-ha
+  name: redis-ha-configmap
+data:
+  init.sh: |
+    MASTER=`redis-cli -h redis-ha -p 26379 sentinel get-master-addr-by-name mymaster | grep -E '[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}'`
+    REDIS_CONF=/data/conf/redis.conf
+    SENTINEL_CONF=/data/conf/sentinel.conf
+    set -e
+    function sentinel_update(){
+      echo "Updating sentinel config"
+      sed -i "1s/^/sentinel monitor mymaster $1 6379 2\\n/" $SENTINEL_CONF
+    }
+    function redis_update(){
+      echo "Updating redis config"
+      echo "slaveof $1 6379" >> $REDIS_CONF
+    }
+    function setup_defaults(){
+      echo "Setting up defaults"
+      if [[ "$HOSTNAME" == "redis-ha-server-0" ]]; then
+        echo "Setting this pod as the default master"
+        sed -i "s/^.*slaveof.*//" $REDIS_CONF
+        sentinel_update "$POD_IP"
+      else
+        echo "Setting default slave config.."
+        echo "slaveof redis-ha-server-0.redis-ha 6379" >> $REDIS_CONF
+        sentinel_update "redis-ha-server-0.redis-ha"
+        redis_update "redis-ha-server-0.redis-ha"
+      fi
+    }
+    function find_master(){
+      echo "Attempting to find master"
+      if [[ ! `redis-cli -h $MASTER ping` ]]; then
+        echo "Can't ping master, attempting to force failover"
+        if `redis-cli -h redis-ha -p 26379 sentinel failover mymaster | grep -q 'NOGOODSLAVE'` ; then 
+          setup_defaults
+          return 0
+        fi
+        sleep 10
+        MASTER=`redis-cli -h redis-ha -p 26379 sentinel get-master-addr-by-name mymaster | grep -E '[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}'`
+        if [[ "$MASTER" ]]; then
+          sentinel_update $MASTER
+          redis_update $MASTER
+        else
+          echo "Could not failover, exiting..."
+          exit 1
+        fi
+      else
+        echo "Found reachable master, updating config"
+        sentinel_update $MASTER
+        redis_update $MASTER
+      fi
+    }
+    
+    mkdir -p /data/conf/
+    echo "Initializing config.."
+
+    cp /readonly-config/redis.conf $REDIS_CONF
+    cp /readonly-config/sentinel.conf $SENTINEL_CONF
+
+    if [[ "$MASTER" ]]; then
+      find_master
+    else
+      setup_defaults
+    fi
+    if [[ "$AUTH" ]]; then
+      echo "Setting auth values"
+      sed -i "s/replace-default-auth/$AUTH/" $REDIS_CONF $SENTINEL_CONF
+    fi
+
+    echo "Ready..."
+    
+  redis.conf: |
+    dir "/data"
+    maxmemory 0
+    maxmemory-policy volatile-lru
+    min-slaves-max-lag 5
+    min-slaves-to-write 1
+    rdbchecksum yes
+    rdbcompression yes
+    repl-diskless-sync yes
+    save 900 1
+  sentinel.conf: |
+    dir "/data"
+    sentinel down-after-milliseconds mymaster 10000
+    sentinel failover-timeout mymaster 180000
+    sentinel parallel-syncs mymaster 5
+  
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: redis-ha
+  name: redis-ha
+spec:
+  clusterIP: None
+  ports:
+  - name: server
+    port: 6379
+    protocol: TCP
+    targetPort: redis
+  - name: sentinel
+    port: 26379
+    protocol: TCP
+    targetPort: sentinel
+  selector:
+    app: redis-ha
+  type: ClusterIP
+
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  labels:
+    app: redis-ha
+  name: redis-ha-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis-ha
+  serviceName: redis-ha
+  template:
+    metadata:
+      labels:
+        app: redis-ha
+    spec:
+      containers:
+      - name: redis
+        image: redis:4.0.11-alpine
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: "AUTH"
+          valueFrom:
+            secretKeyRef:
+              name: redis-ha-secret
+              key: app.auth
+        #command: ["redis-server"]
+        command: ['/bin/sh', '-c', 'sysctl -w net.core.somaxconn=1024 && exec su-exec redis redis-server $0'] # net.core.somaxconn default is 128
+        args:
+        - /data/conf/redis.conf
+        ports:
+        - containerPort: 6379
+          name: redis
+          protocol: TCP
+        securityContext:
+          privileged: true
+        livenessProbe:
+          exec:
+            command: ["redis-cli", "-a", "$AUTH", "ping"]
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          exec:
+            command: ["redis-cli", "-a", "$AUTH", "ping"]
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /data
+          name: data
+      - name: sentinel
+        image: redis:4.0.11-alpine
+        imagePullPolicy: IfNotPresent
+        command:
+        - redis-sentinel
+        args:
+        - /data/conf/sentinel.conf
+        ports:
+        - containerPort: 26379
+          name: sentinel
+          protocol: TCP
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - -p
+            - "26379"
+            - ping
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - -p
+            - "26379"
+            - ping
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /data
+          name: data
+      initContainers:
+      - name: config-init
+        image: redis:4.0.11-alpine
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: "AUTH"
+          valueFrom:
+            secretKeyRef:
+              name: redis-ha-secret
+              key: app.auth
+        command:
+        - sh
+        args:
+        - /readonly-config/init.sh
+        volumeMounts:
+        - mountPath: /readonly-config
+          name: config
+          readOnly: true
+        - mountPath: /data
+          name: data
+      - name: disable-thp     # disable transparent huge pages
+        image: busybox
+        volumeMounts:
+        - name: host-sys
+          mountPath: /host-sys
+        command: ["sh", "-c", "echo never >/host-sys/kernel/mm/transparent_hugepage/enabled"]
+      #securityContext:
+      #  fsGroup: 1000
+      #  runAsNonRoot: true
+      #  runAsUser: 1000
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: redis-ha-configmap
+        name: config
+      - name: host-sys     # disable transparent huge pages
+        hostPath:
+          path: /sys
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      annotations:
+        volume.beta.kubernetes.io/storage-class: "managed-nfs-storage"
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+

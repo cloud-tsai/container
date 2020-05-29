@@ -1,0 +1,98 @@
+## FEATURE:PERSISTENT
+#apiVersion: v1
+#kind: PersistentVolumeClaim
+#metadata:
+#  name: postgresql-pvc
+#  annotations:
+#    volume.beta.kubernetes.io/storage-provisioner: cluster.local/nfs-client-provisioner
+#spec:
+#  accessModes:
+#  - ReadWriteOnce
+#  resources:
+#    requests:
+#      storage: 1G
+#  storageClassName: nfs-client
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: postgresql
+  name: postgresql
+spec:
+  clusterIP: None
+  ports:
+  - port: 5432
+  selector:
+    app: postgresql
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  labels:
+    app: postgresql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+      - name: postgresql
+        image: postgres:9.6-alpine
+#        resources:
+#          limits:
+#            cpu: "500m"
+#            memory: 1Gi
+#          requests:
+#           cpu: "500m"
+#           memory: 1Gi
+#        securityContext:
+#          capabilities:
+#            add:
+#            - IPC_LOCK
+        livenessProbe:
+          exec:
+            command: ['psql', '-U', '$POSTGRES_USER', '-d', '$POSTGRES_DB', '-c', '"\l"']
+          initialDelaySeconds: 300
+          timeoutSeconds: 10
+          periodSeconds: 60
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - psql
+            - -U
+            - postgres
+			- -c
+			- \l
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+        env:
+        - name: "POSTGRES_DB"
+          value: test
+        - name: "POSTGRES_USER"
+          value: test
+        - name: "POSTGRES_PASSWORD"
+          value: test
+        - name: "POSTGRES_INITDB_ARGS"
+          value: "--encoding=UNICODE --lc-collate=zh_CN.utf8 --lc-ctype=zh_CN.utf8"
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+## FEATURE:WITHOUT PERSISTENT
+      - name: data
+        emptyDir: {}
+## FEATURE:PERSISTENT
+#      - name: data
+#        persistentVolumeClaim:
+#          claimName: postgresql-pvc

@@ -1,0 +1,243 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mypg-config
+  labels:
+    system: mypgcluster
+data:
+  app.db.database: "mydb"
+  app.db.cluster.name: "mypgcluster"
+  app.db.cluster.replication.db: "replica_db"
+  app.db.pool.backends: "0:pg-0.mypg::::,1:pg-1.mypg::::,2:pg-2.mypg::::"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mypg-secret
+  labels:
+    system: mypgcluster
+type: Opaque
+data:
+  app.db.user: bXlwZw== #mypg
+  app.db.password: bXlwZ3Bhc3M= #mypgpass
+  app.db.cluster.replication.user: cmVwbGljYQ== #replica
+  app.db.cluster.replication.password: cmVwbGljYXBhc3M= #replicapass
+  app.db.pool.users: bXlwZzpteXBncGFzcw== #mypg:mypgpass
+  app.db.pool.pcp.user: cGNw #pcp
+  app.db.pool.pcp.password: cGNwcGFzcw== #pcppass
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mypg
+  labels:
+    system: mypgcluster
+spec:
+  clusterIP: None
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: pg
+    system: mypgcluster
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mypgpool
+  labels:
+    system: mypgcluster
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    system: mypgcluster
+    app: pgpool
+
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: pg
+  labels:
+    system: mypgcluster
+spec:
+  replicas: 3
+  serviceName: "mypg"
+  selector:
+    matchLabels:
+      app: pg
+      system: mypgcluster
+  template:
+    metadata:
+      name: pg
+      labels:
+        app: pg
+        system: mypgcluster
+    spec:
+      containers:
+        - name: pg
+          image: postdock/postgres:latest-postgres102-repmgr32
+          livenessProbe:
+            exec:
+              command: ['bash', '-c', '/usr/local/bin/cluster/healthcheck/is_major_master.sh']
+            initialDelaySeconds: 600
+            timeoutSeconds: 10
+            periodSeconds: 30
+            successThreshold: 1
+            failureThreshold: 3
+          imagePullPolicy: Always
+          resources:
+            requests:
+              memory: "10Mi"
+              cpu: "10m"
+          env:
+            - name: MY_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            
+            - name: "REPMGR_WAIT_POSTGRES_START_TIMEOUT"
+              value: "600"
+            - name: "REPLICATION_PRIMARY_HOST"
+              value: "pg-0.mypg"
+            - name: "PARTNER_NODES"
+              value: "pg-0.mypg,pg-1.mypg,pg-2.mypg"
+            - name: "NODE_NAME"
+              value: "$(MY_POD_NAME)"
+            - name: "CLUSTER_NODE_NETWORK_NAME"
+              value: "$(MY_POD_NAME).mypg"
+
+            - name: "CONFIGS"
+              value: "wal_keep_segments:250,shared_buffers:300MB,archive_command:'/bin/true'"
+
+            # Work DB
+            - name: "POSTGRES_DB"
+              valueFrom:
+                configMapKeyRef:
+                  name: mypg-config
+                  key: app.db.database
+            - name: "POSTGRES_USER"
+              valueFrom:
+                secretKeyRef:
+                  name: mypg-secret
+                  key: app.db.user
+            - name: "POSTGRES_PASSWORD"
+              valueFrom:
+                secretKeyRef:
+                  name: mypg-secret
+                  key: app.db.password
+
+            # Cluster configs
+            - name: "CLUSTER_NAME"
+              valueFrom:
+                configMapKeyRef:
+                  name: mypg-config
+                  key: app.db.cluster.name
+            - name: "REPLICATION_DB"
+              valueFrom:
+                configMapKeyRef:
+                  name: mypg-config
+                  key: app.db.cluster.replication.db
+            - name: "REPLICATION_USER"
+              valueFrom:
+                secretKeyRef:
+                  name: mypg-secret
+                  key: app.db.cluster.replication.user
+            - name: "REPLICATION_PASSWORD"
+              valueFrom:
+                secretKeyRef:
+                  name: mypg-secret
+                  key: app.db.cluster.replication.password
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+        annotations:
+          volume.beta.kubernetes.io/storage-class: "managed-nfs-storage"
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 2Gi
+
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: pgpool
+  labels:
+    system: mypgcluster
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  template:
+    metadata:
+      name: pgpool
+      labels:
+        system: mypgcluster
+        app: pgpool
+    spec:
+      containers:
+      - name: pgpool
+        image: postdock/pgpool:latest-pgpool37-postgres102
+        livenessProbe:
+          exec:
+            command: ['bash', '-c', '/usr/local/bin/pgpool/has_write_node.sh && /usr/local/bin/pgpool/has_enough_backends.sh']
+          initialDelaySeconds: 600
+          timeoutSeconds: 10
+          periodSeconds: 30
+          successThreshold: 1
+          failureThreshold: 3
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "100Mi"
+            cpu: "10m"
+
+        ports:
+          - containerPort: 5432
+        env:
+          # pcp
+          - name: "CONFIGS"
+            value: "num_init_children:60,max_pool:4,client_idle_limit:900,connection_life_time:300"
+          - name: "PCP_USER"
+            valueFrom:
+              secretKeyRef:
+                name: mypg-secret
+                key: app.db.pool.pcp.user
+          - name: "PCP_PASSWORD"
+            valueFrom:
+              secretKeyRef:
+                name: mypg-secret
+                key: app.db.pool.pcp.password
+
+          # Cluster configs  to hearbit checks
+          - name: "CHECK_USER"
+            valueFrom:
+              secretKeyRef:
+                name: mypg-secret
+                key: app.db.cluster.replication.user
+          - name: "CHECK_PASSWORD"
+            valueFrom:
+              secretKeyRef:
+                name: mypg-secret
+                key: app.db.cluster.replication.password
+          - name: "DB_USERS"
+            valueFrom:
+              secretKeyRef:
+                name: mypg-secret
+                key: app.db.pool.users
+          - name: "BACKENDS"
+            valueFrom:
+              configMapKeyRef:
+                name: mypg-config
+                key: app.db.pool.backends

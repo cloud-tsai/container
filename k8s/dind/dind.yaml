@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-dind
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker
+spec:
+  ports:
+  - name: tcp
+    port: 2375
+    protocol: TCP
+    targetPort: 2375
+  selector:
+    app: docker
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docker
+  labels:
+    app: docker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docker
+  template:
+    metadata:
+      labels:
+        app: docker
+    spec:
+      containers:
+      - name: daemon
+        image: docker:dind
+        args:
+        - --registry-mirror=http://10.100.254.25:5000
+        - --registry-mirror=https://registry.docker-cn.com
+        - --registry-mirror=https://hub-mirror.c.163.com
+        - --insecure-registry=10.100.254.25:5000
+        securityContext:
+          privileged: true
+        env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+        volumeMounts:
+        - name: vol-dind
+          mountPath: /var/lib/docker
+# cli container is optional.
+      - name: cli
+        image: docker:stable
+        command: ['/bin/sh']
+        env:
+        - name: DOCKER_HOST
+          value: tcp://localhost:2375
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+        securityContext:
+          privileged: true
+        stdin: true
+        tty: true
+      volumes:
+      - name: vol-dind
+        persistentVolumeClaim:
+          claimName: pvc-dind
+

@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-secret
+  labels:
+    app: redis
+type: Opaque
+data:
+  app.auth: bXlyZWRpcw==        ## FEATURE:AUTH myredis
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: redis
+  name: redis-configmap
+data:
+  init.sh: |
+    REDIS_CONF=/data/conf/redis.conf
+    set -e
+
+    mkdir -p /data/conf/
+    echo "Initializing config.."
+
+    cp /readonly-config/redis.conf $REDIS_CONF
+
+    if [[ "$AUTH" ]]; then
+      echo "Setting auth values"
+      sed -i "s/# requirepass foobared/requirepass $AUTH/" $REDIS_CONF
+    fi
+
+    echo "Ready..."
+
+  redis.conf: |
+    dir "/data"
+    # requirepass foobared
+    maxmemory 0
+    maxmemory-policy volatile-lru
+    rdbchecksum yes
+    rdbcompression yes
+    save 900 1
+
+## FEATURE:PERSISTENT
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: cluster.local/nfs-client-provisioner
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1G
+  storageClassName: nfs-client
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: redis
+  name: redis
+spec:
+  ports:
+  - port: 6379
+    targetPort: redis
+  selector:
+    app: redis
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: redis
+  name: redis
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:4.0.11-alpine
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: "AUTH"        ## FEATURE:AUTH
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: app.auth
+#       command: ["redis-server"]
+        command: ['/bin/sh', '-c', 'sysctl -w net.core.somaxconn=1024 && exec su-exec redis redis-server $0'] # net.core.somaxconn default is 128
+        args:
+        - /data/conf/redis.conf
+        ports:
+        - containerPort: 6379
+          name: redis
+          protocol: TCP
+        securityContext:
+          privileged: true
+        livenessProbe:
+          exec:
+#           command: ["redis-cli", "ping"]
+            command: ["redis-cli", "-a", "$AUTH", "ping"]        ## FEATURE:AUTH
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          exec:
+#           command: ["redis-cli", "ping"]
+            command: ["redis-cli", "-a", "$AUTH", "ping"]        ## FEATURE:AUTH
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /data
+          name: data
+      initContainers:
+      - name: config-init
+        image: alpine:3.9
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: "AUTH"        ## FEATURE:AUTH
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: app.auth
+        command:
+        - sh
+        args:
+        - /readonly-config/init.sh
+        volumeMounts:
+        - mountPath: /readonly-config
+          name: config
+          readOnly: true
+        - mountPath: /data
+          name: data
+      - name: disable-thp     # disable transparent huge pages
+        image: busybox
+        volumeMounts:
+        - name: host-sys
+          mountPath: /host-sys
+        command: ["sh", "-c", "echo never >/host-sys/kernel/mm/transparent_hugepage/enabled"]
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: redis-configmap
+        name: config
+      - name: host-sys     # disable transparent huge pages
+        hostPath:
+          path: /sys
+
+## FEATURE:WITHOUT PERSISTENT
+      - name: data
+        emptyDir: {}
+## FEATURE:PERSISTENT
+#      - name: data
+#        persistentVolumeClaim:
+#          claimName: redis-pvc
+
+
