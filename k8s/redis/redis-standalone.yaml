@@ -42,20 +42,20 @@ data:
     save 900 1
 
 ## FEATURE:PERSISTENT
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: redis-pvc
-  annotations:
-    volume.beta.kubernetes.io/storage-provisioner: cluster.local/nfs-client-provisioner
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1G
-  storageClassName: nfs-client
+#---
+#apiVersion: v1
+#kind: PersistentVolumeClaim
+#metadata:
+#  name: redis-pvc
+#  annotations:
+#    volume.beta.kubernetes.io/storage-provisioner: cluster.local/nfs-client-provisioner
+#spec:
+#  accessModes:
+#  - ReadWriteOnce
+#  resources:
+#    requests:
+#      storage: 1G
+#  storageClassName: nfs-client
 
 ---
 apiVersion: v1
