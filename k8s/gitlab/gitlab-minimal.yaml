@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitlab-minimal
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gitlab
+  namespace: gitlab-minimal
+  labels:
+    app: gitlab
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs:     ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs:     ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs:     ["get", "create"]
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab
+  namespace: gitlab-minimal
+  labels:
+    app: gitlab
+
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: gitlab
+  namespace: gitlab-minimal
+subjects:
+- kind: ServiceAccount
+  name: gitlab
+  namespace: gitlab-minimal
+roleRef:
+  kind: ClusterRole
+  name: gitlab
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: gitlab-minimal
+spec:
+  ports:
+  - name: httpport
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  - name: httpsport
+    port: 443
+    protocol: TCP
+    targetPort: 443
+  - name: sshport
+    port: 22
+    protocol: TCP
+    targetPort: 22
+  selector:
+    app: gitlab
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: gitlab
+  name: gitlab
+  namespace: gitlab-minimal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitlab
+  template:
+    metadata:
+      labels:
+        app: gitlab
+    spec:
+      serviceAccountName: gitlab
+      containers:
+      - name: gitlab
+        image: gitlab/gitlab-ce:12.4.0-ce.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: httpport
+          containerPort: 80
+          protocol: TCP
+        - name: httpsport
+          containerPort: 443
+          protocol: TCP
+        - name: sshport
+          containerPort: 22
+          protocol: TCP
+        env:
+        - name: GITLAB_OMNIBUS_CONFIG
+          value: "external_url 'http://gitlab.10.100.254.127.xip.io'"
+        stdin: true
+        tty: true
+#        securityContext:
+#          privileged: true
+
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: gitlab
+  namespace: gitlab-minimal
+spec:
+  rules:
+  - host: gitlab.10.100.254.127.xip.io
+    http:
+      paths:
+      - backend:
+          serviceName: gitlab
+          servicePort: 80
+        path: /
