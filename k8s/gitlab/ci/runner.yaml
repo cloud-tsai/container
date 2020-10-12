@@ -57,7 +57,7 @@ spec:
         - sh
         - -c
         - |
-          echo -e '      [[runners.kubernetes.volumes.pvc]]\n        name = "pvc-gitlab-code"\n        mount_path = "/code"' >> /etc/gitlab-runner/config.toml
+          sed -i 's#concurrent = 1#concurrent = 2#g' /etc/gitlab-runner/config.toml && echo -e '      [[runners.kubernetes.volumes.pvc]]\n        name = "pvc-gitlab-code"\n        mount_path = "/code"' >> /etc/gitlab-runner/config.toml
         volumeMounts:
         - mountPath: /etc/gitlab-runner
           name: config
