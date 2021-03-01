@@ -1,20 +1,22 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: mysqlha
-  labels:
-    app: mysqlha
+  name: hrsaasdb-config
 data:
   master.cnf: |
     # Apply this config only on the master.
     [mysqld]
     log-bin
     skip_name_resolve
+    #character_set_server=utf8mb4
+    #collation_server=utf8mb4_unicode_ci
   slave.cnf: |
     # Apply this config only on slaves.
     [mysqld]
     super-read-only
     skip_name_resolve
+    #character_set_server=utf8mb4
+    #collation_server=utf8mb4_unicode_ci
   server-id.cnf: |
     [mysqld]
     server-id=@@SERVER_ID@@
@@ -29,32 +31,30 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: mysqlha
-  labels:
-    app: mysqlha
+  name: hrsaasdb-secret
 type: Opaque
 data:
-  mysql-root-password: bXlzcWxyb290  #mysqlroot
-  mysql-password: bXlzcWw= #mysql
-  mysql-replication-password: bXlzcWxyZXBs #mysqlrepl
+  mysql-root-password: cm9vdA==  #root
+  mysql-password: aHJzYWFz #hrsaas
+  mysql-replication-password: cmVwbA== #repl
 
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: mysqlha
+  name: hrsaasdb
   labels:
-    app: mysqlha
+    app: hrsaasdb
 spec:
-  serviceName: mysqlha
+  serviceName: hrsaasdb
   selector:
     matchLabels:
-      app: mysqlha
+      app: hrsaasdb
   replicas: 3
   template:
     metadata:
       labels:
-        app: mysqlha
+        app: hrsaasdb
     spec:
       initContainers:
       - name: clone-mysql
@@ -74,16 +74,16 @@ spec:
             [[ -d /var/lib/mysql/mysql ]] && rm -fr /var/lib/mysql/*
 
             # Clone data from previous peer.
-            ncat --recv-only mysqlha-$(($ordinal-1)).mysqlha 3307 | xbstream -x -C /var/lib/mysql
+            ncat --recv-only hrsaasdb-$(($ordinal-1)).hrsaasdb 3307 | xbstream -x -C /var/lib/mysql
             # Prepare the backup.
             xtrabackup --prepare --user=${MYSQL_REPLICATION_USER} --password=${MYSQL_REPLICATION_PASSWORD} --target-dir=/var/lib/mysql
         env:
         - name: MYSQL_REPLICATION_USER
-          value: mysqlrepl
+          value: repl
         - name: MYSQL_REPLICATION_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysqlha
+              name: hrsaasdb-secret
               key: mysql-replication-password
         volumeMounts:
         - name: data
@@ -132,21 +132,21 @@ spec:
         - name: MYSQL_ROOT_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysqlha
+              name: hrsaasdb-secret
               key: mysql-root-password
         - name: MYSQL_REPLICATION_USER
-          value: mysqlrepl
+          value: repl
         - name: MYSQL_REPLICATION_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysqlha
+              name: hrsaasdb-secret
               key: mysql-replication-password
         - name: MYSQL_USER
-          value: mysql
+          value: hrsaas
         - name: MYSQL_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysqlha
+              name: hrsaasdb-secret
               key: mysql-password
         ports:
         - name: mysql
@@ -159,8 +159,8 @@ spec:
           mountPath: /etc/mysql/conf.d
 #        resources:
 #          requests:
-#            cpu: {{ .Values.resources.requests.cpu }}
-#            memory: {{ .Values.resources.requests.memory }}
+#            cpu: 100m
+#            memory: 256Mi
         livenessProbe:
           exec:
             command:
@@ -186,14 +186,14 @@ spec:
         - name: MYSQL_PWD
           valueFrom:
             secretKeyRef:
-              name: mysqlha
+              name: hrsaasdb-secret
               key: mysql-root-password
         - name: MYSQL_REPLICATION_USER
-          value: mysqlrepl
+          value: repl
         - name: MYSQL_REPLICATION_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysqlha
+              name: hrsaasdb-secret
               key: mysql-replication-password
         ports:
         - name: xtrabackup
@@ -236,7 +236,7 @@ spec:
               mysql -h 127.0.0.1 --verbose<<EOF
               STOP SLAVE IO_THREAD;
               $(<change_master_to.sql.orig),
-              MASTER_HOST='mysqlha-0.mysqlha',
+              MASTER_HOST='hrsaasdb-0.hrsaasdb',
               MASTER_USER='${MYSQL_REPLICATION_USER}',
               MASTER_PASSWORD='${MYSQL_REPLICATION_PASSWORD}',
               MASTER_CONNECT_RETRY=10;
@@ -265,61 +265,53 @@ spec:
         emptyDir: {}
       - name: config-map
         configMap:
-          name: mysqlha
+          name: hrsaasdb-config
       - name: scripts
         emptyDir: {}
-      - name: data
-        emptyDir: {}
+#      - name: data
+#        emptyDir: {}
 
-#  volumeClaimTemplates:
-#  - metadata:
-#      name: data
-#      annotations:
-#      {{- range $key, $value := .Values.persistence.annotations }}
-#        {{ $key }}: {{ $value }}
-#      {{- end }}
-#    spec:
-#      accessModes:
-#      {{- range .Values.persistence.accessModes }}
-#      - {{ . | quote }}
-#      {{- end }}
-#      resources:
-#       requests:
-#          storage: {{ .Values.persistence.size | quote }}
-#      {{- if .Values.persistence.storageClass }}
-#      {{- if (eq "-" .Values.persistence.storageClass) }}
-#      storageClassName: ""
-#      {{- else }}
-#      storageClassName: "{{ .Values.persistence.storageClass }}"
-#      {{- end }}
-#      {{- end }}
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 8Gi
+      storageClassName: nfs-client
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mysqlha
+  name: hrsaasdb
   labels:
-    app: mysqlha
+    app: hrsaasdb
 spec:
   ports:
-  - name: mysqlha
+  - name: hrsaasdb
     port: 3306
   clusterIP: None
   selector:
-    app: mysqlha
+    app: hrsaasdb
+
 ---
 # Client service for connecting to any MySQL instance for reads.
 # For writes, you must instead connect to the master: mysql-0.mysql.
-apiVersion: v1
-kind: Service
-metadata:
-  name: mysqlha-readonly
-  labels:
-    app: mysqlha
-spec:
-  ports:
-  - name: mysqlha
-    port: 3306
-  selector:
-    app: mysqlha
+
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: hrsaasdb-readonly
+#  labels:
+#    app: hrsaasdb
+#spec:
+#  ports:
+#  - name: hrsaasdb
+#    port: 3306
+#  selector:
+#    app: hrsaasdb

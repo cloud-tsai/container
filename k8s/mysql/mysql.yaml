@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: mysql
-        image: mysql:5.7
+        image: mysql:5.7.13
         ports:
         - containerPort: 3306
         stdin: true
@@ -25,10 +25,11 @@ spec:
         - name: MYSQL_ROOT_PASSWORD
           value: "root"
         - name: MYSQL_DATABASE
-          value: "nacos"
+          value: "demo"
         - name: MYSQL_USER
-          value: "nacos"
+          value: "demo"
         - name: MYSQL_PASSWORD
-          value: "nacos"
+          value: "demo"
         args:
-        - --socket=/var/run/mysqld/mysqld.sock
+        - --character-set-server=utf8mb4
+        - --collation-server=utf8mb4_unicode_ci
