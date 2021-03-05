@@ -80,14 +80,14 @@ spec:
       
 #      - name: data
 #        persistentVolumeClaim:
-#          claimName: pvc-jdoms-db
+#          claimName: pvc-mysql
 #---
 #apiVersion: v1
 #kind: PersistentVolumeClaim
 #metadata:
 #  annotations:
 #    volume.beta.kubernetes.io/storage-provisioner: cluster.local/nfs-client-provisioner
-#  name: pvc-jdoms-db
+#  name: pvc-mysql
 #spec:
 #  accessModes:
 #  - ReadWriteOnce

@@ -8,6 +8,7 @@ data:
     [mysqld]
     log-bin
     skip_name_resolve
+    max_connections=200
     #character_set_server=utf8mb4
     #collation_server=utf8mb4_unicode_ci
   slave.cnf: |
@@ -15,6 +16,7 @@ data:
     [mysqld]
     super-read-only
     skip_name_resolve
+    max_connections=200
     #character_set_server=utf8mb4
     #collation_server=utf8mb4_unicode_ci
   server-id.cnf: |
