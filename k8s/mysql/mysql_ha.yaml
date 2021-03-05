@@ -148,6 +148,8 @@ spec:
             secretKeyRef:
               name: hrsaasdb-secret
               key: mysql-password
+        - name: TZ
+          value: "Asia/Shanghai"
         ports:
         - name: mysql
           containerPort: 3306

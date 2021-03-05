@@ -1,3 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+data:
+  custom.cnf: |
+    [mysqld]
+    #log-bin
+    #skip_name_resolve
+    #character_set_server=utf8mb4
+    #collation_server=utf8mb4_unicode_ci
+    max_connections=200
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  ports:
+  - name: tcp
+    port: 3306
+    protocol: TCP
+    targetPort: 3306
+  selector:
+    app: mysql
+  type: NodePort
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +59,39 @@ spec:
           value: "demo"
         - name: MYSQL_PASSWORD
           value: "demo"
+        - name: TZ
+          value: "Asia/Shanghai"
         args:
         - --character-set-server=utf8mb4
         - --collation-server=utf8mb4_unicode_ci
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/mysql
+          subPath: mysql
+        - name: conf
+          mountPath: /etc/mysql/conf.d
+      volumes:
+      - name: conf
+        configMap:
+          name: mysql-config
+############################### persistency or not #######################
+      - name: data
+        emptyDir: {}
+      
+#      - name: data
+#        persistentVolumeClaim:
+#          claimName: pvc-jdoms-db
+#---
+#apiVersion: v1
+#kind: PersistentVolumeClaim
+#metadata:
+#  annotations:
+#    volume.beta.kubernetes.io/storage-provisioner: cluster.local/nfs-client-provisioner
+#  name: pvc-jdoms-db
+#spec:
+#  accessModes:
+#  - ReadWriteOnce
+#  resources:
+#    requests:
+#      storage: 5Gi
+#  storageClassName: nfs-client
