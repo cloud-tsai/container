@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  labels:
+    system: whst
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgresql
+    system: whst
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  labels:
+    app: postgresql
+    system: whst
+spec:
+  serviceName: db
+  selector:
+    matchLabels:
+      app: postgresql
+      system: whst
+  template:
+    metadata:
+      name: postgresql
+      labels:
+        app: postgresql
+        system: whst
+    spec:
+      containers:
+        - name: postgresql
+          image: harbor.billjc.com/library/postgres:9.6-alpine
+          livenessProbe:
+            exec:
+              command: 
+              - bash
+              - -c
+              - |
+                psql -U $POSTGRES_USER -d $POSTGRES_DB -c "\l"
+            initialDelaySeconds: 300
+            timeoutSeconds: 10
+            periodSeconds: 60
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "10Mi"
+              cpu: "10m"
+          env:
+            - name: "POSTGRES_DB"
+              value: "whst"
+            - name: "POSTGRES_USER"
+              value: "whst"
+            - name: "POSTGRES_PASSWORD"
+              value: "whst"
+            - name: "POSTGRES_INITDB_ARGS"
+              value: "--encoding=UNICODE --lc-collate=zh_CN.utf8 --lc-ctype=zh_CN.utf8"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: data
+        emptyDir: {}
+#  volumeClaimTemplates:
+#    - metadata:
+#        name: data
+#        annotations:
+#          volume.beta.kubernetes.io/storage-class: "nfs-client"
+#      spec:
+#        accessModes: [ "ReadWriteOnce" ]
+#        resources:
+#          requests:
+#            storage: 1Gi
+
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odoo
+  labels:
+    system: whst
+spec:
+  ports:
+    - port: 8069
+      targetPort: 8069
+  selector:
+    app: odoo
+    system: whst
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odoo
+  labels:
+    app: odoo
+    system: whst
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: odoo
+      system: whst
+  template:
+    metadata:
+      labels:
+        app: odoo
+        system: whst
+    spec:
+      initContainers:
+      - name: mount-addons
+        image: harbor.billjc.com/wolong/whst:1.0
+        imagePullPolicy: Always
+        command:
+        - /bin/sh
+        - -c
+        - |
+          unzip /opt/whst/whst.zip -d /mnt/extra-addons/
+        volumeMounts:
+        - name: addons
+          mountPath: /mnt/extra-addons
+      containers:
+      - name: odoo
+        image: harbor.billjc.com/wolong/odoo:8.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: HOST
+          value: db
+        - name: PORT
+          value: "5432"
+        - name: "USER"
+          value: "whst"
+        - name: "PASSWORD"
+          value: "whst"
+        volumeMounts:
+        - name: addons
+          mountPath: /mnt/extra-addons
+      restartPolicy: Always
+      volumes:
+      - name: addons
+        emptyDir: {}
+        
+        
+        
+        

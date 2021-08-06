@@ -1,0 +1,115 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-user
+  labels:
+    app: minio
+    system: bladex
+type: Opaque
+data:
+  accesskey: bWluaW8= #minio
+  secretkey: YmV0YXB0cEBtaW5pbw== #betaptp
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: minio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: nfs-client
+
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: minio-svc
+  labels:
+    app: minio
+    system: bladex
+spec:
+  type: NodePort
+  selector:
+    app: minio
+  ports:
+    - name: service
+      nodePort: 30776  #optional
+      port: 9000
+      targetPort: 9000
+      protocol: TCP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  labels:
+    app: minio
+    system: bladex
+spec:
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      name: minio
+      labels:
+        app: minio
+        system: bladex
+    spec:
+      volumes:
+##        - name: minio-server-config
+##          configMap:
+##            name: minio-config-cm
+        - name: minio-user
+          secret:
+            secretName: minio-user
+        - name: podinfo
+          downwardAPI:
+            items:
+              - path: "labels"
+                fieldRef:
+                  fieldPath: metadata.labels
+        - name: export
+#          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: minio
+
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2021-04-22T15-44-28Z
+          imagePullPolicy: IfNotPresent
+          args: ["server", "/export"]
+          volumeMounts:
+            - name: export
+              mountPath: /export
+#            - name: minio-server-config
+#              mountPath: /root/.minio/
+            - name: podinfo
+              mountPath: /podinfo
+              readOnly: false
+          ports:
+            - name: service
+              containerPort: 9000
+          env:
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-user
+                  key: accesskey
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-user
+                  key: secretkey
+          livenessProbe:
+            tcpSocket:
+              port: 9000
+            timeoutSeconds: 1
+
