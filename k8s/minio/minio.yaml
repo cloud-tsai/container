@@ -5,11 +5,11 @@ metadata:
   name: minio-user
   labels:
     app: minio
-    system: bladex
+    system: oss
 type: Opaque
 data:
   accesskey: bWluaW8= #minio
-  secretkey: YmV0YXB0cEBtaW5pbw== #betaptp
+  secretkey: c3VwZXJhZG1pbkBtaW5pbw== #superadmin@minio
 
 ---
 kind: PersistentVolumeClaim
@@ -24,7 +24,6 @@ spec:
       storage: 10Gi
   storageClassName: nfs-client
 
-
 ---
 kind: Service
 apiVersion: v1
@@ -32,17 +31,15 @@ metadata:
   name: minio-svc
   labels:
     app: minio
-    system: bladex
+    system: oss
 spec:
-  type: NodePort
   selector:
     app: minio
   ports:
     - name: service
-      nodePort: 30776  #optional
+      protocol: TCP
       port: 9000
       targetPort: 9000
-      protocol: TCP
 
 ---
 apiVersion: apps/v1
@@ -51,7 +48,7 @@ metadata:
   name: minio
   labels:
     app: minio
-    system: bladex
+    system: oss
 spec:
   selector:
     matchLabels:
@@ -61,7 +58,7 @@ spec:
       name: minio
       labels:
         app: minio
-        system: bladex
+        system: oss
     spec:
       volumes:
 ##        - name: minio-server-config
@@ -113,3 +110,30 @@ spec:
               port: 9000
             timeoutSeconds: 1
 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: minio-mc
+    system: oss
+  name: minio-mc
+spec:
+  selector:
+    matchLabels:
+      app: minio-mc
+      system: oss
+  template:
+    metadata:
+      labels:
+        app: minio-mc
+        system: oss
+    spec:
+      containers:
+      - command:
+        - /bin/sh
+        image: minio/mc
+        imagePullPolicy: IfNotPresent
+        name: minio-mc
+        stdin: true
+        tty: true
